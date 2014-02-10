@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	//"fmt"
 )
 
 // EntryType describes the different types of an Entry.
@@ -26,6 +27,8 @@ type ServerConn struct {
 	conn     *textproto.Conn
 	host     string
 	features map[string]string
+
+	TranslateEncoding bool
 }
 
 // Entry describes a file and is returned by List().
@@ -276,6 +279,13 @@ func parseListLine(line string) (*Entry, error) {
 		return nil, errors.New("Unsupported LIST line")
 	}
 
+	// fields:
+	// 0 - type
+	// 4 - size
+	// 5 - month
+	// 6 - day
+	// 7 - year|hour:min
+
 	e := &Entry{}
 	switch fields[0][0] {
 	case '-':
@@ -296,17 +306,28 @@ func parseListLine(line string) (*Entry, error) {
 		e.Size = size
 	}
 	var timeStr string
-	if strings.Contains(fields[7], ":") { // this year
-		thisYear, _, _ := time.Now().Date()
-		timeStr = fields[6] + " " + fields[5] + " " + strconv.Itoa(thisYear)[2:4] + " " + fields[7] + " GMT"
-	} else { // not this year
-		timeStr = fields[6] + " " + fields[5] + " " + fields[7][2:4] + " " + "00:00" + " GMT"
-	}
-	t, err := time.Parse("_2 Jan 06 15:04 MST", timeStr)
+	setYear, currMon, _ := time.Now().Date()
+	ts, err := time.Parse("02 Jan 06", "01 "+fields[5]+" 01")
 	if err != nil {
 		return nil, err
 	}
-	e.Time = t
+	dateMon := ts.Month()
+	if dateMon>currMon {
+		setYear--
+	}
+	if strings.Contains(fields[7], ":") {
+		// year hidden (may be this or prev. year), time present
+		timeStr = fields[6] + " " + fields[5] + " " + strconv.Itoa(setYear)[2:4] + " " + fields[7]
+	} else {
+		// year present, time hidden
+		timeStr = fields[6] + " " + fields[5] + " " + fields[7][2:4] + " " + "00:00"
+	}
+	loc, _ := time.LoadLocation("Local")
+	t, err := time.ParseInLocation("_2 Jan 06 15:04", timeStr, loc)
+	if err != nil {
+		return nil, err
+	}
+	e.Time = t.Local()
 
 	e.Name = strings.Join(fields[8:], " ")
 	return e, nil
@@ -404,6 +425,10 @@ func (c *ServerConn) Retr(path string) (io.ReadCloser, error) {
 //
 // The returned ReadCloser must be closed to cleanup the FTP data connection.
 func (c *ServerConn) RetrFrom(path string, offset uint64) (io.ReadCloser, error) {
+	_, utf8Supported := c.features["UTF8"]
+	if(!utf8Supported && c.TranslateEncoding) {
+		path = ISO8859_15ToUTF8(path)
+	}
 	conn, err := c.cmdDataConnFrom(offset, "RETR %s", path)
 	if err != nil {
 		return nil, err
@@ -427,6 +452,14 @@ func (c *ServerConn) Stor(path string, r io.Reader) error {
 //
 // Hint: io.Pipe() can be used if an io.Writer is required.
 func (c *ServerConn) StorFrom(path string, r io.Reader, offset uint64) error {
+	_, utf8Supported := c.features["UTF8"]
+	//fmt.Println(utf8Supported)
+	//fmt.Println(c.TranslateEncoding)
+	if(!utf8Supported && c.TranslateEncoding) {
+		path = UTF8ToISO8859_15(path)
+	}
+	//fmt.Println(path)
+
 	conn, err := c.cmdDataConnFrom(offset, "STOR %s", path)
 	if err != nil {
 		return err
