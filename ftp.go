@@ -4,13 +4,14 @@ package ftp
 import (
 	"bufio"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/textproto"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
-	//"fmt"
 )
 
 // EntryType describes the different types of an Entry.
@@ -37,6 +38,14 @@ type Entry struct {
 	Type EntryType
 	Size uint64
 	Time time.Time
+}
+
+// EntryEx describes a file and is returned by MList() and MInfo().
+type EntryEx struct {
+	// name of the file
+	Name string
+	// facts describing the file. Keys for standard facts (lowercase): size, modify, create, type (), unique, perm, lang, media-type, charset
+	Facts map[string]string
 }
 
 // response represent a data-connection
@@ -312,7 +321,7 @@ func parseListLine(line string) (*Entry, error) {
 		return nil, err
 	}
 	dateMon := ts.Month()
-	if dateMon>currMon {
+	if dateMon > currMon {
 		setYear--
 	}
 	if strings.Contains(fields[7], ":") {
@@ -379,6 +388,92 @@ func (c *ServerConn) List(path string) (entries []*Entry, err error) {
 	return
 }
 
+// Parse a time fact returned by MLS(D|T). Format is YYYYMMDDHHMMSS[.F...]
+func ParseMListTime(sTime string) (t time.Time, err error) {
+	regExStr := "^([0-9]{4})([0-9]{2})([0-9]{2})([0-9]{2})([0-9]{2})([0-9]{2})$"
+	hasFraction := false
+	if strings.Contains(sTime, ".") {
+		regExStr = "^([0-9]{4})([0-9]{2})([0-9]{2})([0-9]{2})([0-9]{2})([0-9]{2})\\.([0-9]+)$"
+		hasFraction = true
+	}
+	rex := regexp.MustCompile(regExStr)
+	matches := rex.FindStringSubmatch(sTime)
+	if matches == nil {
+		err = fmt.Errorf("Unexpected time string %g", sTime)
+		return
+	}
+	yr, _ := strconv.Atoi(matches[1])
+	mn, _ := strconv.Atoi(matches[2])
+	dy, _ := strconv.Atoi(matches[3])
+	hr, _ := strconv.Atoi(matches[4])
+	mt, _ := strconv.Atoi(matches[5])
+	sc, _ := strconv.Atoi(matches[6])
+	nsec := 0
+	if hasFraction {
+		nsec, _ = strconv.Atoi(matches[7] + strings.Repeat("0", 9-len(matches[7])))
+	}
+	t = time.Date(yr, time.Month(mn), dy, hr, mt, sc, nsec, time.UTC)
+	return
+}
+
+// Parses the (hopefully) standard format returned by the MLS(D|T) FTP command.
+func (c *ServerConn) parseMListLine(line string) (e *EntryEx, err error) {
+	line = strings.Trim(line, " \r\n\t")
+	fields := strings.Split(line, ";")
+
+	e = &EntryEx{}
+	e.Facts = make(map[string]string)
+	for idx, item := range fields {
+		if idx == len(fields)-1 {
+			// the last item should be the filename
+			// it is always preceded by a space
+			if strings.HasPrefix(item, " ") {
+				e.Name = item[1:]
+				_, utf8Supported := c.features["UTF8"]
+				if !utf8Supported && c.TranslateEncoding {
+					e.Name = ISO8859_15ToUTF8(e.Name)
+				}
+			} else {
+				err = fmt.Errorf("invalid filename %s", item)
+				return
+			}
+		} else {
+			// other items are facts, in the form "key=value"
+			factKV := strings.Split(item, "=")
+			if len(factKV) == 2 {
+				e.Facts[strings.ToLower(factKV[0])] = factKV[1]
+			}
+		}
+	}
+	return
+}
+
+// Issues an MLSD command, which lists a directory in a standard format
+func (c *ServerConn) MList(path string) (entries []*EntryEx, err error) {
+	conn, err := c.cmdDataConnFrom(0, "MLSD %s", path)
+	if err != nil {
+		return
+	}
+
+	r := &response{conn, c}
+	defer r.Close()
+
+	bio := bufio.NewReader(r)
+	for {
+		line, e := bio.ReadString('\n')
+		if e == io.EOF {
+			break
+		} else if e != nil {
+			return nil, e
+		}
+		entry, err := c.parseMListLine(line)
+		if err == nil {
+			entries = append(entries, entry)
+		}
+	}
+	return
+}
+
 // ChangeDir issues a CWD FTP command, which changes the current directory to
 // the specified path.
 func (c *ServerConn) ChangeDir(path string) error {
@@ -426,7 +521,7 @@ func (c *ServerConn) Retr(path string) (io.ReadCloser, error) {
 // The returned ReadCloser must be closed to cleanup the FTP data connection.
 func (c *ServerConn) RetrFrom(path string, offset uint64) (io.ReadCloser, error) {
 	_, utf8Supported := c.features["UTF8"]
-	if(!utf8Supported && c.TranslateEncoding) {
+	if !utf8Supported && c.TranslateEncoding {
 		path = ISO8859_15ToUTF8(path)
 	}
 	conn, err := c.cmdDataConnFrom(offset, "RETR %s", path)
@@ -453,12 +548,9 @@ func (c *ServerConn) Stor(path string, r io.Reader) error {
 // Hint: io.Pipe() can be used if an io.Writer is required.
 func (c *ServerConn) StorFrom(path string, r io.Reader, offset uint64) error {
 	_, utf8Supported := c.features["UTF8"]
-	//fmt.Println(utf8Supported)
-	//fmt.Println(c.TranslateEncoding)
-	if(!utf8Supported && c.TranslateEncoding) {
+	if !utf8Supported && c.TranslateEncoding {
 		path = UTF8ToISO8859_15(path)
 	}
-	//fmt.Println(path)
 
 	conn, err := c.cmdDataConnFrom(offset, "STOR %s", path)
 	if err != nil {
