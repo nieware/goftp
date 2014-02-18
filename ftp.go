@@ -246,7 +246,7 @@ func (c *ServerConn) cmd(expected int, format string, args ...interface{}) (int,
 	return code, line, err
 }
 
-// cmdDataConnFrom executes a command which require a FTP data connection.
+// cmdDataConnFrom executes a command which requires a FTP data connection.
 // Issues a REST FTP command to specify the number of bytes to skip for the transfer.
 func (c *ServerConn) cmdDataConnFrom(offset uint64, format string, args ...interface{}) (net.Conn, error) {
 	conn, err := c.openDataConn()
@@ -470,6 +470,25 @@ func (c *ServerConn) MList(path string) (entries []*EntryEx, err error) {
 		if err == nil {
 			entries = append(entries, entry)
 		}
+	}
+	return
+}
+
+// Issues an MLST command, which returns info about the specified directory entry
+// in a standard format
+func (c *ServerConn) MInfo(path string) (entry *EntryEx, err error) {
+	_, resp, err := c.cmd(StatusRequestedFileActionOK, "MLST %s", path)
+	if err != nil {
+		return
+	}
+	lines := strings.Split(resp, "\n")
+	// RFC3659 section 7.2. (control-response) states that the response has 3 lines,
+	// the second line contains one space and then the data.
+	if len(lines) == 3 && len(lines[1]) > 1 {
+		line := lines[1][1:]
+		entry, err = c.parseMListLine(line)
+	} else {
+		err = fmt.Errorf("unexpected MLST response %s", resp)
 	}
 	return
 }
