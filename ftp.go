@@ -151,6 +151,26 @@ func (c *ServerConn) feat() error {
 	return nil
 }
 
+// converts a string from UTF-8 to the encoding used by the server
+// (if the server doesn't support UTF-8, ISO8859-15 is assumed)
+func (c *ServerConn) toServerEncoding(s string) string {
+	_, utf8Supported := c.features["UTF8"]
+	if !utf8Supported && c.TranslateEncoding {
+		s = UTF8ToISO8859_15(s)
+	}
+	return s
+}
+
+// converts a string from the encoding used by the server to UTF-8
+// (if the server doesn't support UTF-8, ISO8859-15 is assumed)
+func (c *ServerConn) fromServerEncoding(s string) string {
+	_, utf8Supported := c.features["UTF8"]
+	if !utf8Supported && c.TranslateEncoding {
+		s = ISO8859_15ToUTF8(s)
+	}
+	return s
+}
+
 // epsv issues an "EPSV" command to get a port number for a data connection.
 func (c *ServerConn) epsv() (port int, err error) {
 	_, line, err := c.cmd(StatusExtendedPassiveMode, "EPSV")
@@ -282,7 +302,7 @@ func (c *ServerConn) cmdDataConnFrom(offset uint64, format string, args ...inter
 
 // parseListLine parses the various non-standard format returned by the LIST
 // FTP command.
-func parseListLine(line string) (*Entry, error) {
+func (c *ServerConn) parseListLine(line string) (*Entry, error) {
 	fields := strings.Fields(line)
 	if len(fields) < 9 {
 		return nil, errors.New("Unsupported LIST line")
@@ -338,12 +358,13 @@ func parseListLine(line string) (*Entry, error) {
 	}
 	e.Time = t.Local()
 
-	e.Name = strings.Join(fields[8:], " ")
+	e.Name = c.fromServerEncoding(strings.Join(fields[8:], " "))
 	return e, nil
 }
 
 // NameList issues an NLST FTP command.
 func (c *ServerConn) NameList(path string) (entries []string, err error) {
+	path = c.toServerEncoding(path)
 	conn, err := c.cmdDataConnFrom(0, "NLST %s", path)
 	if err != nil {
 		return
@@ -354,7 +375,7 @@ func (c *ServerConn) NameList(path string) (entries []string, err error) {
 
 	scanner := bufio.NewScanner(r)
 	for scanner.Scan() {
-		entries = append(entries, scanner.Text())
+		entries = append(entries, c.fromServerEncoding(scanner.Text()))
 	}
 	if err = scanner.Err(); err != nil {
 		return entries, err
@@ -364,6 +385,7 @@ func (c *ServerConn) NameList(path string) (entries []string, err error) {
 
 // List issues a LIST FTP command.
 func (c *ServerConn) List(path string) (entries []*Entry, err error) {
+	path = c.toServerEncoding(path)
 	conn, err := c.cmdDataConnFrom(0, "LIST %s", path)
 	if err != nil {
 		return
@@ -380,7 +402,7 @@ func (c *ServerConn) List(path string) (entries []*Entry, err error) {
 		} else if e != nil {
 			return nil, e
 		}
-		entry, err := parseListLine(line)
+		entry, err := c.parseListLine(line)
 		if err == nil {
 			entries = append(entries, entry)
 		}
@@ -428,11 +450,7 @@ func (c *ServerConn) parseMListLine(line string) (e *EntryEx, err error) {
 			// the last item should be the filename
 			// it is always preceded by a space
 			if strings.HasPrefix(item, " ") {
-				e.Name = item[1:]
-				_, utf8Supported := c.features["UTF8"]
-				if !utf8Supported && c.TranslateEncoding {
-					e.Name = ISO8859_15ToUTF8(e.Name)
-				}
+				e.Name = c.fromServerEncoding(item[1:])
 			} else {
 				err = fmt.Errorf("invalid filename %s", item)
 				return
@@ -450,6 +468,7 @@ func (c *ServerConn) parseMListLine(line string) (e *EntryEx, err error) {
 
 // Issues an MLSD command, which lists a directory in a standard format
 func (c *ServerConn) MList(path string) (entries []*EntryEx, err error) {
+	path = c.toServerEncoding(path)
 	conn, err := c.cmdDataConnFrom(0, "MLSD %s", path)
 	if err != nil {
 		return
@@ -477,6 +496,7 @@ func (c *ServerConn) MList(path string) (entries []*EntryEx, err error) {
 // Issues an MLST command, which returns info about the specified directory entry
 // in a standard format
 func (c *ServerConn) MInfo(path string) (entry *EntryEx, err error) {
+	path = c.toServerEncoding(path)
 	_, resp, err := c.cmd(StatusRequestedFileActionOK, "MLST %s", path)
 	if err != nil {
 		return
@@ -496,6 +516,7 @@ func (c *ServerConn) MInfo(path string) (entry *EntryEx, err error) {
 // ChangeDir issues a CWD FTP command, which changes the current directory to
 // the specified path.
 func (c *ServerConn) ChangeDir(path string) error {
+	path = c.toServerEncoding(path)
 	_, _, err := c.cmd(StatusRequestedFileActionOK, "CWD %s", path)
 	return err
 }
@@ -523,7 +544,7 @@ func (c *ServerConn) CurrentDir() (string, error) {
 		return "", errors.New("Unsuported PWD response format")
 	}
 
-	return msg[start+1 : end], nil
+	return c.fromServerEncoding(msg[start+1 : end]), nil
 }
 
 // Retr issues a RETR FTP command to fetch the specified file from the remote
@@ -539,10 +560,7 @@ func (c *ServerConn) Retr(path string) (io.ReadCloser, error) {
 //
 // The returned ReadCloser must be closed to cleanup the FTP data connection.
 func (c *ServerConn) RetrFrom(path string, offset uint64) (io.ReadCloser, error) {
-	_, utf8Supported := c.features["UTF8"]
-	if !utf8Supported && c.TranslateEncoding {
-		path = ISO8859_15ToUTF8(path)
-	}
+	path = c.toServerEncoding(path)
 	conn, err := c.cmdDataConnFrom(offset, "RETR %s", path)
 	if err != nil {
 		return nil, err
@@ -566,10 +584,7 @@ func (c *ServerConn) Stor(path string, r io.Reader) error {
 //
 // Hint: io.Pipe() can be used if an io.Writer is required.
 func (c *ServerConn) StorFrom(path string, r io.Reader, offset uint64) error {
-	_, utf8Supported := c.features["UTF8"]
-	if !utf8Supported && c.TranslateEncoding {
-		path = UTF8ToISO8859_15(path)
-	}
+	path = c.toServerEncoding(path)
 
 	conn, err := c.cmdDataConnFrom(offset, "STOR %s", path)
 	if err != nil {
@@ -588,6 +603,9 @@ func (c *ServerConn) StorFrom(path string, r io.Reader, offset uint64) error {
 
 // Rename renames a file on the remote FTP server.
 func (c *ServerConn) Rename(from, to string) error {
+	from = c.toServerEncoding(from)
+	to = c.toServerEncoding(to)
+
 	_, _, err := c.cmd(StatusRequestFilePending, "RNFR %s", from)
 	if err != nil {
 		return err
@@ -600,6 +618,7 @@ func (c *ServerConn) Rename(from, to string) error {
 // Delete issues a DELE FTP command to delete the specified file from the
 // remote FTP server.
 func (c *ServerConn) Delete(path string) error {
+	path = c.toServerEncoding(path)
 	_, _, err := c.cmd(StatusRequestedFileActionOK, "DELE %s", path)
 	return err
 }
@@ -607,6 +626,7 @@ func (c *ServerConn) Delete(path string) error {
 // MakeDir issues a MKD FTP command to create the specified directory on the
 // remote FTP server.
 func (c *ServerConn) MakeDir(path string) error {
+	path = c.toServerEncoding(path)
 	_, _, err := c.cmd(StatusPathCreated, "MKD %s", path)
 	return err
 }
@@ -614,6 +634,7 @@ func (c *ServerConn) MakeDir(path string) error {
 // RemoveDir issues a RMD FTP command to remove the specified directory from
 // the remote FTP server.
 func (c *ServerConn) RemoveDir(path string) error {
+	path = c.toServerEncoding(path)
 	_, _, err := c.cmd(StatusRequestedFileActionOK, "RMD %s", path)
 	return err
 }
