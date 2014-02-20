@@ -294,7 +294,7 @@ func (c *ServerConn) cmdDataConnFrom(offset uint64, format string, args ...inter
 	}
 	if code != StatusAlreadyOpen && code != StatusAboutToSend {
 		conn.Close()
-		return nil, &textproto.Error{code, msg}
+		return nil, &textproto.Error{Code: code, Msg: msg}
 	}
 
 	return conn, nil
@@ -410,12 +410,12 @@ func (c *ServerConn) List(path string) (entries []*Entry, err error) {
 	return
 }
 
-// Parse a time fact returned by MLS(D|T). Format is YYYYMMDDHHMMSS[.F...]
+// ParseMListTime parses a time fact returned by MLS(D|T). Format is YYYYMMDDHHMMSS[.F...]
 func ParseMListTime(sTime string) (t time.Time, err error) {
-	regExStr := "^([0-9]{4})([0-9]{2})([0-9]{2})([0-9]{2})([0-9]{2})([0-9]{2})$"
+	regExStr := `^([0-9]{4})([0-9]{2})([0-9]{2})([0-9]{2})([0-9]{2})([0-9]{2})$`
 	hasFraction := false
 	if strings.Contains(sTime, ".") {
-		regExStr = "^([0-9]{4})([0-9]{2})([0-9]{2})([0-9]{2})([0-9]{2})([0-9]{2})\\.([0-9]+)$"
+		regExStr = `^([0-9]{4})([0-9]{2})([0-9]{2})([0-9]{2})([0-9]{2})([0-9]{2}).([0-9]+)$`
 		hasFraction = true
 	}
 	rex := regexp.MustCompile(regExStr)
@@ -438,7 +438,7 @@ func ParseMListTime(sTime string) (t time.Time, err error) {
 	return
 }
 
-// Parses the (hopefully) standard format returned by the MLS(D|T) FTP command.
+// parseMListLine parses the (hopefully) standard format returned by the MLS(D|T) FTP command.
 func (c *ServerConn) parseMListLine(line string) (e *EntryEx, err error) {
 	line = strings.Trim(line, " \r\n\t")
 	fields := strings.Split(line, ";")
@@ -466,7 +466,7 @@ func (c *ServerConn) parseMListLine(line string) (e *EntryEx, err error) {
 	return
 }
 
-// Issues an MLSD command, which lists a directory in a standard format
+// MList issues an MLSD command, which lists a directory in a standard format
 func (c *ServerConn) MList(path string) (entries []*EntryEx, err error) {
 	path = c.toServerEncoding(path)
 	conn, err := c.cmdDataConnFrom(0, "MLSD %s", path)
@@ -493,7 +493,7 @@ func (c *ServerConn) MList(path string) (entries []*EntryEx, err error) {
 	return
 }
 
-// Issues an MLST command, which returns info about the specified directory entry
+// MInfo issues an MLST command, which returns info about the specified directory entry
 // in a standard format
 func (c *ServerConn) MInfo(path string) (entry *EntryEx, err error) {
 	path = c.toServerEncoding(path)
