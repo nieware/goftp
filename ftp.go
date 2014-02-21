@@ -655,7 +655,7 @@ func (c *ServerConn) NoOp() error {
 
 // Logout issues a REIN FTP command to logout the current user.
 func (c *ServerConn) Logout() error {
-	_, _, err := c.cmd(StatusLoggedIn, "REIN")
+	_, _, err := c.cmd(StatusReady, "REIN") // from dsluis/goftp
 	return err
 }
 
