@@ -2,7 +2,7 @@ package ftp
 
 import "unicode/utf8"
 
-// ISO-8859-15 to UTF-8
+// ISO8859_15ToUTF8 converts an ISO-8859-15 string to UTF-8 encoding
 func ISO8859_15ToUTF8(s string) string {
 	var rn rune
 	u := make([]rune, len(s))
@@ -33,7 +33,7 @@ func ISO8859_15ToUTF8(s string) string {
 	return string(u)
 }
 
-// UTF-8 to ISO-8859-15
+// UTF8ToISO8859_15 converts a UTF-8 string to ISO-8859-15 encoding
 func UTF8ToISO8859_15(c string) string {
 	var b byte
 	s := make([]byte, utf8.RuneCountInString(c))
@@ -67,5 +67,3 @@ func UTF8ToISO8859_15(c string) string {
 	//fmt.Printf("%x\n", s)
 	return string(s)
 }
-
-

@@ -18,9 +18,9 @@ import (
 type EntryType int
 
 const (
-	EntryTypeFile EntryType = iota
-	EntryTypeFolder
-	EntryTypeLink
+	EntryTypeFile   EntryType = iota // file
+	EntryTypeFolder                  // directory
+	EntryTypeLink                    // symlink
 )
 
 // ServerConn represents the connection to a remote FTP server.
@@ -187,7 +187,7 @@ func (c *ServerConn) epsv() (port int, err error) {
 	start := strings.Index(line, "|||")
 	end := strings.LastIndex(line, "|")
 	if start == -1 || end == -1 {
-		err = errors.New("Invalid EPSV response format")
+		err = errors.New("invalid EPSV response format")
 		return
 	}
 	port, err = strconv.Atoi(line[start+3 : end])
@@ -205,7 +205,7 @@ func (c *ServerConn) pasv() (port int, err error) {
 	start := strings.Index(line, "(")
 	end := strings.LastIndex(line, ")")
 	if start == -1 || end == -1 {
-		err = errors.New("Invalid EPSV response format")
+		err = errors.New("invalid EPSV response format")
 		return
 	}
 
@@ -311,7 +311,7 @@ func (c *ServerConn) cmdDataConnFrom(offset uint64, format string, args ...inter
 func (c *ServerConn) parseListLine(line string) (*Entry, error) {
 	fields := strings.Fields(line)
 	if len(fields) < 9 {
-		return nil, errors.New("Unsupported LIST line")
+		return nil, errors.New("unsupported LIST line")
 	}
 
 	// fields:
@@ -330,7 +330,7 @@ func (c *ServerConn) parseListLine(line string) (*Entry, error) {
 	case 'l':
 		e.Type = EntryTypeLink
 	default:
-		return nil, errors.New("Unknown entry type")
+		return nil, errors.New("unknown entry type")
 	}
 
 	if e.Type == EntryTypeFile {
@@ -427,7 +427,7 @@ func ParseMListTime(sTime string) (t time.Time, err error) {
 	rex := regexp.MustCompile(regExStr)
 	matches := rex.FindStringSubmatch(sTime)
 	if matches == nil {
-		err = fmt.Errorf("Unexpected time string %g", sTime)
+		err = fmt.Errorf("unexpected time string %g", sTime)
 		return
 	}
 	yr, _ := strconv.Atoi(matches[1])
@@ -547,7 +547,7 @@ func (c *ServerConn) CurrentDir() (string, error) {
 	end := strings.LastIndex(msg, "\"")
 
 	if start == -1 || end == -1 {
-		return "", errors.New("Unsuported PWD response format")
+		return "", errors.New("unsupported PWD response format")
 	}
 
 	return c.fromServerEncoding(msg[start+1 : end]), nil
@@ -561,7 +561,7 @@ func (c *ServerConn) Retr(path string) (io.ReadCloser, error) {
 	return c.RetrFrom(path, 0)
 }
 
-// Retr issues a RETR FTP command to fetch the specified file from the remote
+// RetrFrom issues a RETR FTP command to fetch the specified file from the remote
 // FTP server, the server will not send the offset first bytes of the file.
 //
 // The returned ReadCloser must be closed to cleanup the FTP data connection.
@@ -584,7 +584,7 @@ func (c *ServerConn) Stor(path string, r io.Reader) error {
 	return c.StorFrom(path, r, 0)
 }
 
-// Stor issues a STOR FTP command to store a file to the remote FTP server.
+// StorFrom issues a STOR FTP command to store a file to the remote FTP server.
 // Stor creates the specified file with the content of the io.Reader, writing
 // on the server will start at the given file offset.
 //
