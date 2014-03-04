@@ -8,10 +8,16 @@ import (
 	"io"
 	"net"
 	"net/textproto"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
+)
+
+const (
+	// Time Layout used by MLSD/MLST (without fractions of second)
+	TimeLayoutMlsx = "20060102150405"
+	// Time Layout used by MLSD/MLST (including fractions of second)
+	TimeLayoutMlsxFrac = "20060102150405.9"
 )
 
 // EntryType describes the different types of an Entry.
@@ -418,29 +424,11 @@ func (c *ServerConn) List(path string) (entries []*Entry, err error) {
 
 // ParseMListTime parses a time fact returned by MLS(D|T). Format is YYYYMMDDHHMMSS[.F...]
 func ParseMListTime(sTime string) (t time.Time, err error) {
-	regExStr := `^([0-9]{4})([0-9]{2})([0-9]{2})([0-9]{2})([0-9]{2})([0-9]{2})$`
-	hasFraction := false
+	timeLayout := TimeLayoutMlsx
 	if strings.Contains(sTime, ".") {
-		regExStr = `^([0-9]{4})([0-9]{2})([0-9]{2})([0-9]{2})([0-9]{2})([0-9]{2}).([0-9]+)$`
-		hasFraction = true
+		timeLayout = TimeLayoutMlsxFrac
 	}
-	rex := regexp.MustCompile(regExStr)
-	matches := rex.FindStringSubmatch(sTime)
-	if matches == nil {
-		err = fmt.Errorf("unexpected time string %g", sTime)
-		return
-	}
-	yr, _ := strconv.Atoi(matches[1])
-	mn, _ := strconv.Atoi(matches[2])
-	dy, _ := strconv.Atoi(matches[3])
-	hr, _ := strconv.Atoi(matches[4])
-	mt, _ := strconv.Atoi(matches[5])
-	sc, _ := strconv.Atoi(matches[6])
-	nsec := 0
-	if hasFraction {
-		nsec, _ = strconv.Atoi(matches[7] + strings.Repeat("0", 9-len(matches[7])))
-	}
-	t = time.Date(yr, time.Month(mn), dy, hr, mt, sc, nsec, time.UTC)
+	t, err = time.Parse(timeLayout, sTime)
 	return
 }
 
