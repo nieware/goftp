@@ -8,6 +8,8 @@ import (
 	"io"
 	"net"
 	"net/textproto"
+	"os"
+	"path"
 	"strconv"
 	"strings"
 	"time"
@@ -35,7 +37,10 @@ type ServerConn struct {
 	host     string
 	features map[string]string
 
+	// translate filename encoding from/to ISO 8859-15 if server does not support UTF-8
 	TranslateEncoding bool
+	// list "." and ".."
+	ListDotDirs bool
 }
 
 // Entry describes a file and is returned by List().
@@ -47,11 +52,81 @@ type Entry struct {
 }
 
 // EntryEx describes a file and is returned by MList() and MInfo().
+// EntryEx implements the FileInfo interface
 type EntryEx struct {
 	// name of the file
-	Name string
+	name string
 	// facts describing the file. Keys for standard facts (lowercase): size, modify, create, type (), unique, perm, lang, media-type, charset
 	Facts map[string]string
+}
+
+// Name returns the name of the FTP directory entry
+func (e EntryEx) Name() string {
+	return e.name
+}
+
+// SetName sets the name of the FTP directory entry
+func (e *EntryEx) SetName(s string) {
+	e.name = s
+}
+
+// Size returns the size
+func (e EntryEx) Size() int64 {
+	sSize, exists := e.Facts["size"]
+	if !exists {
+		return 0
+	}
+	size, err := strconv.Atoi(sSize)
+	if err != nil {
+		return 0
+	}
+	return int64(size)
+}
+
+// Mode returns the file permissions and other flags
+func (e EntryEx) Mode() os.FileMode {
+	var mode os.FileMode
+	sPerm, pExists := e.Facts["perm"]
+	//sType, tExists := e.Facts["type"]
+	if pExists {
+		if strings.Contains(sPerm, "r") {
+			mode += 0400
+		}
+		if strings.Contains(sPerm, "w") {
+			mode += 0200
+		}
+	}
+	if e.IsDir() {
+		mode += os.ModeDir
+	}
+	return mode
+}
+
+// ModTime returns the last modified time
+func (e EntryEx) ModTime() time.Time {
+	sModify, exists := e.Facts["modify"]
+	if !exists {
+		return time.Unix(0, 0)
+	}
+	modify, err := ParseMListTime(sModify)
+	if err != nil {
+		return time.Unix(0, 0)
+	}
+	return modify
+}
+
+// IsDir
+func (e EntryEx) IsDir() bool {
+	eType, exists := e.Facts["type"]
+	if !exists {
+		return false
+	}
+	return (eType == "dir") || (eType == "cdir") || (eType == "pdir")
+}
+
+// Sys returns the underlying data source (can and does return nil)
+func (e EntryEx) Sys() interface{} {
+	return nil
 }
 
 // response represent a data-connection
@@ -433,18 +508,18 @@ func ParseMListTime(sTime string) (t time.Time, err error) {
 }
 
 // parseMListLine parses the (hopefully) standard format returned by the MLS(D|T) FTP command.
-func (c *ServerConn) parseMListLine(line string) (e *EntryEx, err error) {
+func (c *ServerConn) parseMListLine(line string) (e EntryEx, err error) {
 	line = strings.Trim(line, " \r\n\t")
 	fields := strings.Split(line, ";")
 
-	e = &EntryEx{}
 	e.Facts = make(map[string]string)
 	for idx, item := range fields {
 		if idx == len(fields)-1 {
 			// the last item should be the filename
 			// it is always preceded by a space
 			if strings.HasPrefix(item, " ") {
-				e.Name = c.fromServerEncoding(item[1:])
+				name := c.fromServerEncoding(item[1:])
+				e.SetName(name)
 			} else {
 				err = fmt.Errorf("invalid filename %s", item)
 				return
@@ -461,7 +536,7 @@ func (c *ServerConn) parseMListLine(line string) (e *EntryEx, err error) {
 }
 
 // MList issues an MLSD command, which lists a directory in a standard format
-func (c *ServerConn) MList(path string) (entries []*EntryEx, err error) {
+func (c *ServerConn) MList(path string) (entries []EntryEx, err error) {
 	path = c.toServerEncoding(path)
 	conn, err := c.cmdDataConnFrom(0, "MLSD %s", path)
 	if err != nil {
@@ -480,7 +555,7 @@ func (c *ServerConn) MList(path string) (entries []*EntryEx, err error) {
 			return nil, e
 		}
 		entry, err := c.parseMListLine(line)
-		if err == nil {
+		if err == nil && (entry.Name() != "." && entry.Name() != ".." || c.ListDotDirs) {
 			entries = append(entries, entry)
 		}
 	}
@@ -489,7 +564,7 @@ func (c *ServerConn) MList(path string) (entries []*EntryEx, err error) {
 
 // MInfo issues an MLST command, which returns info about the specified directory entry
 // in a standard format
-func (c *ServerConn) MInfo(path string) (entry *EntryEx, err error) {
+func (c *ServerConn) MInfo(path string) (entry EntryEx, err error) {
 	path = c.toServerEncoding(path)
 	_, resp, err := c.cmd(StatusRequestedFileActionOK, "MLST %s", path)
 	if err != nil {
@@ -652,6 +727,39 @@ func (c *ServerConn) Logout() error {
 func (c *ServerConn) Quit() error {
 	c.conn.Cmd("QUIT")
 	return c.conn.Close()
+}
+
+// The following functions implement the FileSystem interface
+
+// ReadDir reads the directory named by dirname and returns a
+// list of directory entries.
+func (c *ServerConn) ReadDir(dirname string) (entries []os.FileInfo, err error) {
+	dirEntries, err := c.MList(dirname)
+	if err != nil {
+		return
+	}
+	entries = make([]os.FileInfo, len(dirEntries))
+	for i, fi := range dirEntries {
+		entries[i] = fi
+	}
+	return
+}
+
+// Lstat returns a FileInfo describing the named file. If the file is a
+// symbolic link, the returned FileInfo describes the symbolic link. Lstat
+// makes no attempt to follow the link.
+func (c *ServerConn) Lstat(name string) (entry os.FileInfo, err error) {
+	entry, err = c.MInfo(name)
+	return
+}
+
+// Join joins any number of path elements into a single path, adding a
+// separator if necessary. The result is Cleaned; in particular, all
+// empty strings are ignored.
+//
+// The separator is FileSystem specific.
+func (c *ServerConn) Join(elem ...string) string {
+	return path.Join(elem...)
 }
 
 // Read implements the io.Reader interface on a FTP data connection.
